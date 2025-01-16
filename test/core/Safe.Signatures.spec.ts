@@ -1,9 +1,10 @@
 import { getCompatFallbackHandler } from "./../utils/setup";
 import { calculateSafeMessageHash, signHash, buildContractSignature } from "./../../src/utils/execution";
 import { expect } from "chai";
-import { deployments, ethers } from "hardhat";
+import hre from "hardhat";
+import crypto from "crypto";
 import { AddressZero } from "@ethersproject/constants";
-import { getSafeTemplate, getSafeWithOwners } from "../utils/setup";
+import { getSafeTemplate, getSafe } from "../utils/setup";
 import {
     safeSignTypedData,
     executeTx,
@@ -19,15 +20,15 @@ import {
 import { chainId } from "../utils/encoding";
 
 describe("Safe", () => {
-    const setupTests = deployments.createFixture(async ({ deployments }) => {
+    const setupTests = hre.deployments.createFixture(async ({ deployments }) => {
         await deployments.fixture();
         const compatFallbackHandler = await getCompatFallbackHandler();
-        const signers = await ethers.getSigners();
+        const signers = await hre.ethers.getSigners();
         const [user1] = signers;
-        const safe = await getSafeWithOwners([user1.address]);
+        const safe = await getSafe({ owners: [user1.address] });
 
         return {
-            safe,
+            safe: safe.connect(user1),
             compatFallbackHandler,
             signers,
         };
@@ -46,22 +47,29 @@ describe("Safe", () => {
         it("should correctly calculate EIP-712 hash", async () => {
             const { safe } = await setupTests();
             const safeAddress = await safe.getAddress();
-            const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
-            const typedDataHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
-            await expect(
-                await safe.getTransactionHash(
-                    tx.to,
-                    tx.value,
-                    tx.data,
-                    tx.operation,
-                    tx.safeTxGas,
-                    tx.baseGas,
-                    tx.gasPrice,
-                    tx.gasToken,
-                    tx.refundReceiver,
-                    tx.nonce,
-                ),
-            ).to.be.eq(typedDataHash);
+
+            for (let i = 0; i < 100; i++) {
+                const randomAddress = "0x" + crypto.randomBytes(20).toString("hex");
+                const randomValue = "0x" + crypto.randomBytes(32).toString("hex");
+                const randomData = "0x" + crypto.randomBytes(128).toString("hex");
+
+                const tx = buildSafeTransaction({ to: randomAddress, nonce: await safe.nonce(), value: randomValue, data: randomData });
+                const typedDataHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
+                await expect(
+                    await safe.getTransactionHash(
+                        tx.to,
+                        tx.value,
+                        tx.data,
+                        tx.operation,
+                        tx.safeTxGas,
+                        tx.baseGas,
+                        tx.gasPrice,
+                        tx.gasToken,
+                        tx.refundReceiver,
+                        tx.nonce,
+                    ),
+                ).to.be.eq(typedDataHash);
+            }
         });
     });
 
@@ -165,7 +173,7 @@ describe("Safe", () => {
             const {
                 signers: [user1],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address]);
+            const safe = await getSafe({ owners: [user1.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             await expect(executeTx(safe, tx, [await safeSignTypedData(user1, safeAddress, tx, 1)])).to.be.revertedWith("GS026");
@@ -243,7 +251,7 @@ describe("Safe", () => {
             const {
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             await expect(executeTx(safe, tx, [])).to.be.revertedWith("GS020");
@@ -253,7 +261,7 @@ describe("Safe", () => {
             const {
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             await expect(
@@ -271,9 +279,17 @@ describe("Safe", () => {
             } = await setupTests();
             const compatFallbackHandler = await getCompatFallbackHandler();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const signerSafe = await getSafeWithOwners([user5.address], 1, compatFallbackHandlerAddress);
+            const signerSafe = await getSafe({
+                owners: [user5.address],
+                threshold: 1,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const signerSafeAddress = await signerSafe.getAddress();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address, user4.address, signerSafeAddress]);
+            const safe = (
+                await getSafe({
+                    owners: [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
+                })
+            ).connect(user1);
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
 
@@ -317,7 +333,9 @@ describe("Safe", () => {
                 "0000000000000000000000000000000000000000000000000000000000000020" +
                 "00" + // r, s, v
                 "0000000000000000000000000000000000000000000000000000000000000000"; // Some data to read
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, signatures)).to.be.revertedWith("GS021");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, signatures)).to.be.revertedWith(
+                "GS021",
+            );
         });
 
         it("should fail if signatures data is not present", async () => {
@@ -336,7 +354,9 @@ describe("Safe", () => {
                 "0000000000000000000000000000000000000000000000000000000000000041" +
                 "00"; // r, s, v
 
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, signatures)).to.be.revertedWith("GS022");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, signatures)).to.be.revertedWith(
+                "GS022",
+            );
         });
 
         it("should fail if signatures data is too short", async () => {
@@ -356,19 +376,23 @@ describe("Safe", () => {
                 "00" + // r, s, v
                 "0000000000000000000000000000000000000000000000000000000000000020"; // length
 
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, signatures)).to.be.revertedWith("GS023");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, signatures)).to.be.revertedWith(
+                "GS023",
+            );
         });
 
         it("should not be able to use different chainId for signing", async () => {
             const {
                 signers: [user1],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address]);
+            const safe = await getSafe({ owners: [user1.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
             const signatures = buildSignatureBytes([await safeSignTypedData(user1, safeAddress, tx, 1)]);
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, signatures)).to.be.revertedWith("GS026");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, signatures)).to.be.revertedWith(
+                "GS026",
+            );
         });
 
         it("if not msg.sender on-chain approval is required", async () => {
@@ -381,7 +405,9 @@ describe("Safe", () => {
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
             const signatures = buildSignatureBytes([await safeApproveHash(user1, safe, tx, true)]);
-            await expect(user2Safe["checkSignatures(bytes32,bytes)"](txHash, signatures)).to.be.revertedWith("GS025");
+            await expect(
+                user2Safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, signatures),
+            ).to.be.revertedWith("GS025");
         });
 
         it("should revert if threshold is not set", async () => {
@@ -390,25 +416,25 @@ describe("Safe", () => {
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, "0x")).to.be.revertedWith("GS001");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, "0x")).to.be.revertedWith("GS001");
         });
 
         it("should revert if not the required amount of signature data is provided", async () => {
             const {
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, "0x")).to.be.revertedWith("GS020");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, "0x")).to.be.revertedWith("GS020");
         });
 
         it("should not be able to use different signature type of same owner", async () => {
             const {
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -417,7 +443,9 @@ describe("Safe", () => {
                 await safeSignTypedData(user1, safeAddress, tx),
                 await safeSignTypedData(user3, safeAddress, tx),
             ]);
-            await expect(safe["checkSignatures(bytes32,bytes)"](txHash, signatures)).to.be.revertedWith("GS026");
+            await expect(safe["checkSignatures(address,bytes32,bytes)"](hre.ethers.ZeroAddress, txHash, signatures)).to.be.revertedWith(
+                "GS026",
+            );
         });
 
         it("should be able to mix all signature types", async () => {
@@ -426,9 +454,15 @@ describe("Safe", () => {
             } = await setupTests();
             const compatFallbackHandler = await getCompatFallbackHandler();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const signerSafe = await getSafeWithOwners([user5.address], 1, compatFallbackHandlerAddress);
+            const signerSafe = await getSafe({
+                owners: [user5.address],
+                threshold: 1,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const signerSafeAddress = await signerSafe.getAddress();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address, user4.address, signerSafeAddress]);
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
+            });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -445,7 +479,7 @@ describe("Safe", () => {
                 signerSafeSig,
             ]);
 
-            await safe["checkSignatures(bytes32,bytes)"](txHash, signatures);
+            await safe["checkSignatures(address,bytes32,bytes)"](user1.address, txHash, signatures);
         });
     });
 
@@ -514,7 +548,7 @@ describe("Safe", () => {
             const {
                 signers: [user1],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address]);
+            const safe = await getSafe({ owners: [user1.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHashData = preimageSafeTransactionHash(safeAddress, tx, await chainId());
@@ -542,11 +576,11 @@ describe("Safe", () => {
                 compatFallbackHandler,
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners(
-                [user1.address, user2.address, user3.address],
-                3,
-                await compatFallbackHandler.getAddress(),
-            );
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address],
+                threshold: 3,
+                fallbackHandler: await compatFallbackHandler.getAddress(),
+            });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHashData = preimageSafeTransactionHash(safeAddress, tx, await chainId());
@@ -559,11 +593,11 @@ describe("Safe", () => {
                 compatFallbackHandler,
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners(
-                [user1.address, user2.address, user3.address],
-                3,
-                await compatFallbackHandler.getAddress(),
-            );
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address],
+                threshold: 3,
+                fallbackHandler: await compatFallbackHandler.getAddress(),
+            });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHashData = preimageSafeTransactionHash(safeAddress, tx, await chainId());
@@ -582,13 +616,17 @@ describe("Safe", () => {
                 signers: [user1, user2, user3, user4, user5],
             } = await setupTests();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const signerSafe = await getSafeWithOwners([user5.address], 1, compatFallbackHandlerAddress);
+            const signerSafe = await getSafe({
+                owners: [user5.address],
+                threshold: 1,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const signerSafeAddress = await signerSafe.getAddress();
-            const safe = await getSafeWithOwners(
-                [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
-                5,
-                compatFallbackHandlerAddress,
-            );
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
+                threshold: 5,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -605,11 +643,11 @@ describe("Safe", () => {
                 signerSafeSig,
             ]);
 
-            await safe["checkSignatures(bytes32,bytes,bytes)"](txHash, "0x", signatures);
+            await safe.connect(user1)["checkSignatures(bytes32,bytes,bytes)"](txHash, "0x", signatures);
         });
     });
 
-    describe("checkNSignatures", async () => {
+    describe("checkNSignatures", () => {
         it("should fail if signature points into static part", async () => {
             const {
                 safe,
@@ -709,7 +747,7 @@ describe("Safe", () => {
             const {
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -720,7 +758,7 @@ describe("Safe", () => {
             const {
                 signers: [user1, user2, user3],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -740,9 +778,15 @@ describe("Safe", () => {
             } = await setupTests();
             const compatFallbackHandler = await getCompatFallbackHandler();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const signerSafe = await getSafeWithOwners([user5.address], 1, compatFallbackHandlerAddress);
+            const signerSafe = await getSafe({
+                owners: [user5.address],
+                threshold: 1,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const signerSafeAddress = await signerSafe.getAddress();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address, user4.address, signerSafeAddress]);
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
+            });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -775,7 +819,7 @@ describe("Safe", () => {
             const {
                 signers: [user1, user2, user3, user4],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address, user4.address]);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address, user4.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -788,7 +832,7 @@ describe("Safe", () => {
             const {
                 signers: [user1, user2, user3, user4],
             } = await setupTests();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address, user4.address], 2);
+            const safe = await getSafe({ owners: [user1.address, user2.address, user3.address, user4.address], threshold: 2 });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -811,7 +855,7 @@ describe("Safe", () => {
                 signers: [user1, user2],
             } = await setupTests();
 
-            const safe = await getSafeWithOwners([user1.address]);
+            const safe = await getSafe({ owners: [user1.address] });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -938,7 +982,11 @@ describe("Safe", () => {
                 signers: [user1, user2, user3],
             } = await setupTests();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address], 3, compatFallbackHandlerAddress);
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address],
+                threshold: 3,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const safeAddress = await safe.getAddress();
 
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
@@ -952,7 +1000,11 @@ describe("Safe", () => {
                 signers: [user1, user2, user3],
             } = await setupTests();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const safe = await getSafeWithOwners([user1.address, user2.address, user3.address], 3, compatFallbackHandlerAddress);
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address],
+                threshold: 3,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const safeAddress = await safe.getAddress();
 
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
@@ -971,13 +1023,17 @@ describe("Safe", () => {
             } = await setupTests();
             const compatFallbackHandler = await getCompatFallbackHandler();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const signerSafe = await getSafeWithOwners([user5.address], 1, compatFallbackHandlerAddress);
+            const signerSafe = await getSafe({
+                owners: [user5.address],
+                threshold: 1,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const signerSafeAddress = await signerSafe.getAddress();
-            const safe = await getSafeWithOwners(
-                [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
-                5,
-                compatFallbackHandlerAddress,
-            );
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address, user4.address, signerSafeAddress],
+                threshold: 5,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());
@@ -994,7 +1050,7 @@ describe("Safe", () => {
                 signerSafeSig,
             ]);
 
-            await safe["checkNSignatures(bytes32,bytes,bytes,uint256)"](txHash, "0x", signatures, 5);
+            await safe.connect(user1)["checkNSignatures(bytes32,bytes,bytes,uint256)"](txHash, "0x", signatures, 5);
         });
 
         it("should be able to require no signatures", async () => {
@@ -1012,11 +1068,11 @@ describe("Safe", () => {
                 signers: [user1, user2, user3, user4],
             } = await setupTests();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const safe = await getSafeWithOwners(
-                [user1.address, user2.address, user3.address, user4.address],
-                4,
-                compatFallbackHandlerAddress,
-            );
+            const safe = await getSafe({
+                owners: [user1.address, user2.address, user3.address, user4.address],
+                threshold: 4,
+                fallbackHandler: compatFallbackHandlerAddress,
+            });
             const safeAddress = await safe.getAddress();
 
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
@@ -1032,11 +1088,13 @@ describe("Safe", () => {
                 signers: [user1, user2, user3, user4],
             } = await setupTests();
             const compatFallbackHandlerAddress = await compatFallbackHandler.getAddress();
-            const safe = await getSafeWithOwners(
-                [user1.address, user2.address, user3.address, user4.address],
-                2,
-                compatFallbackHandlerAddress,
-            );
+            const safe = (
+                await getSafe({
+                    owners: [user1.address, user2.address, user3.address, user4.address],
+                    threshold: 2,
+                    fallbackHandler: compatFallbackHandlerAddress,
+                })
+            ).connect(user1);
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, nonce: await safe.nonce() });
             const txHash = calculateSafeTransactionHash(safeAddress, tx, await chainId());

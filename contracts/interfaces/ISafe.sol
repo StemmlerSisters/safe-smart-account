@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 pragma solidity >=0.7.0 <0.9.0;
 
-import {Enum} from "../libraries/Enum.sol";
+import {Enum} from "./../libraries/Enum.sol";
+import {IFallbackManager} from "./IFallbackManager.sol";
+import {IGuardManager} from "./IGuardManager.sol";
 import {IModuleManager} from "./IModuleManager.sol";
 import {IOwnerManager} from "./IOwnerManager.sol";
-import {IFallbackManager} from "./IFallbackManager.sol";
 
 /**
  * @title ISafe - A multisignature wallet interface with support for confirmations using signed messages based on EIP-712.
  * @author @safe-global/safe-protocol
  */
-interface ISafe is IModuleManager, IOwnerManager, IFallbackManager {
+interface ISafe is IModuleManager, IGuardManager, IOwnerManager, IFallbackManager {
     event SafeSetup(address indexed initiator, address[] owners, uint256 threshold, address initializer, address fallbackHandler);
     event ApproveHash(bytes32 indexed approvedHash, address indexed owner);
     event SignMsg(bytes32 indexed msgHash);
@@ -75,18 +76,21 @@ interface ISafe is IModuleManager, IOwnerManager, IFallbackManager {
     ) external payable returns (bool success);
 
     /**
-     * @notice Checks whether the signature provided is valid for the provided data and hash. Reverts otherwise.
+     * @notice Checks whether the signature provided is valid for the provided data and hash and executor. Reverts otherwise.
+     * @param executor Address that executes the transaction.
+     *        ⚠️⚠️⚠️ Make sure that the executor address is a legitimate executor.
+     *        Incorrectly passed the executor might reduce the threshold by 1 signature. ⚠️⚠️⚠️
      * @param dataHash Hash of the data (could be either a message hash or transaction hash)
      * @param signatures Signature data that should be verified.
      *                   Can be packed ECDSA signature ({bytes32 r}{bytes32 s}{uint8 v}), contract signature (EIP-1271) or approved hash.
      */
-    function checkSignatures(bytes32 dataHash, bytes memory signatures) external view;
+    function checkSignatures(address executor, bytes32 dataHash, bytes memory signatures) external view;
 
     /**
      * @notice Checks whether the signature provided is valid for the provided data and hash. Reverts otherwise.
      * @dev Since the EIP-1271 does an external call, be mindful of reentrancy attacks.
-     * @param executor Address that executing the transaction.
-     *        ⚠️⚠️⚠️ Make sure that the executor address is a legitmate executor.
+     * @param executor Address that executes the transaction.
+     *        ⚠️⚠️⚠️ Make sure that the executor address is a legitimate executor.
      *        Incorrectly passed the executor might reduce the threshold by 1 signature. ⚠️⚠️⚠️
      * @param dataHash Hash of the data (could be either a message hash or transaction hash)
      * @param signatures Signature data that should be verified.

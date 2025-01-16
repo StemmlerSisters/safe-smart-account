@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 pragma solidity >=0.7.0 <0.9.0;
 
+import {ISafe} from "./../interfaces/ISafe.sol";
 import {SafeStorage} from "./SafeStorage.sol";
-import {ISafe} from "../interfaces/ISafe.sol";
 
 /**
  * @title SignMessageLib - Allows to sign messages on-chain by writing the signed message hashes on-chain.
@@ -26,7 +26,7 @@ contract SignMessageLib is SafeStorage {
     }
 
     /**
-     * @dev Returns hash of a message that can be signed by owners.
+     * @dev Returns the hash of a message that can be signed by owners.
      * @param message Message that should be hashed.
      * @return Message hash.
      */
