@@ -1,6 +1,6 @@
 import { expect } from "chai";
-import hre, { deployments, ethers } from "hardhat";
-import { getMock, getSafeWithOwners } from "../utils/setup";
+import hre from "hardhat";
+import { getMock, getSafe } from "../utils/setup";
 import {
     buildSafeTransaction,
     executeContractCallWithSigners,
@@ -10,11 +10,11 @@ import {
 } from "../../src/utils/execution";
 
 describe("OnlyOwnersGuard", () => {
-    const setupTests = deployments.createFixture(async ({ deployments }) => {
+    const setupTests = hre.deployments.createFixture(async ({ deployments }) => {
         await deployments.fixture();
-        const signers = await ethers.getSigners();
+        const signers = await hre.ethers.getSigners();
         const [user1] = signers;
-        const safe = await getSafeWithOwners([user1.address]);
+        const safe = await getSafe({ owners: [user1.address] });
         const guardFactory = await hre.ethers.getContractFactory("OnlyOwnersGuard");
         const guard = await guardFactory.deploy();
         const guardAddress = await guard.getAddress();
@@ -39,7 +39,7 @@ describe("OnlyOwnersGuard", () => {
             const nonce = await safe.nonce();
             const safeTx = buildSafeTransaction({ to: mockAddress, data: "0xbaddad42", nonce });
 
-            executeTxWithSigners(safe, safeTx, [user1]);
+            await executeTxWithSigners(safe.connect(user1), safeTx, [user1]);
         });
 
         it("should not allow a random user exec", async () => {

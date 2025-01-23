@@ -1,6 +1,6 @@
 import { expect } from "chai";
-import hre, { deployments, ethers } from "hardhat";
-import { deployContract, getSafeWithOwners } from "../utils/setup";
+import hre from "hardhat";
+import { deployContractFromSource, getSafe } from "../utils/setup";
 import {
     safeApproveHash,
     buildSignatureBytes,
@@ -14,9 +14,9 @@ import {
 import { chainId } from "../utils/encoding";
 
 describe("Safe", () => {
-    const setupTests = deployments.createFixture(async ({ deployments }) => {
+    const setupTests = hre.deployments.createFixture(async ({ deployments }) => {
         await deployments.fixture();
-        const signers = await ethers.getSigners();
+        const signers = await hre.ethers.getSigners();
         const [user1] = signers;
         const setterSource = `
             contract StorageSetter {
@@ -30,7 +30,7 @@ describe("Safe", () => {
                     /* solhint-enable no-inline-assembly */
                 }
             }`;
-        const storageSetter = await deployContract(user1, setterSource);
+        const storageSetter = await deployContractFromSource(user1, setterSource);
         const TestNativeTokenReceiver = await hre.ethers.getContractFactory("TestNativeTokenReceiver");
         const nativeTokenReceiver = await TestNativeTokenReceiver.deploy();
 
@@ -40,9 +40,9 @@ describe("Safe", () => {
                     require(false, "Shit happens");
                 }
             }`;
-        const reverter = await deployContract(user1, reverterSource);
+        const reverter = await deployContractFromSource(user1, reverterSource);
         return {
-            safe: await getSafeWithOwners([user1.address]),
+            safe: await getSafe({ owners: [user1.address] }),
             reverter,
             storageSetter,
             nativeTokenReceiver,
@@ -57,21 +57,28 @@ describe("Safe", () => {
             const safeAddress = await safe.getAddress();
             const tx = buildSafeTransaction({ to: safeAddress, safeTxGas: 1000000, nonce: await safe.nonce() });
             const signatureBytes = buildSignatureBytes([await safeApproveHash(user1, safe, tx, true)]);
-            await expect(
-                safe.execTransaction(
-                    tx.to,
-                    tx.value,
-                    tx.data,
-                    tx.operation,
-                    tx.safeTxGas,
-                    tx.baseGas,
-                    tx.gasPrice,
-                    tx.gasToken,
-                    tx.refundReceiver,
-                    signatureBytes,
-                    { gasLimit: 1000000 },
-                ),
-            ).to.be.revertedWith("GS010");
+
+            const txPromise = safe.execTransaction(
+                tx.to,
+                tx.value,
+                tx.data,
+                tx.operation,
+                tx.safeTxGas,
+                tx.baseGas,
+                tx.gasPrice,
+                tx.gasToken,
+                tx.refundReceiver,
+                signatureBytes,
+                { gasLimit: 1000000 },
+            );
+
+            // ZkSync node will not even let you execute the transaction with too little gas and just throw, so we can't test the revert reason
+            // .to.be.reverted works as a catch statement
+            if (hre.network.zksync) {
+                await expect(txPromise).to.be.reverted;
+            } else {
+                await expect(txPromise).to.be.revertedWith("GS010");
+            }
         });
 
         it("should emit event for successful call execution", async () => {
@@ -124,7 +131,7 @@ describe("Safe", () => {
         it("should revert for failed call execution if gasPrice == 0 and safeTxGas == 0", async () => {
             const { safe, reverter, signers } = await setupTests();
             const [user1] = signers;
-            await expect(executeContractCallWithSigners(safe, reverter, "revert", [], [user1])).to.revertedWith("GS013");
+            await expect(executeContractCallWithSigners(safe, reverter, "revert", [], [user1])).to.revertedWith("Shit happens");
         });
 
         it("should emit event for successful delegatecall execution", async () => {
@@ -177,7 +184,7 @@ describe("Safe", () => {
         it("should emit event for failed delegatecall execution if gasPrice == 0 and safeTxGas == 0", async () => {
             const { safe, reverter, signers } = await setupTests();
             const [user1] = signers;
-            await expect(executeContractCallWithSigners(safe, reverter, "revert", [], [user1], true)).to.revertedWith("GS013");
+            await expect(executeContractCallWithSigners(safe, reverter, "revert", [], [user1], true)).to.revertedWith("Shit happens");
         });
 
         it("should revert on unknown operation", async () => {
@@ -201,20 +208,17 @@ describe("Safe", () => {
                 refundReceiver: user2.address,
             });
 
-            await user1.sendTransaction({ to: safeAddress, value: ethers.parseEther("1") });
+            await user1.sendTransaction({ to: safeAddress, value: hre.ethers.parseEther("1") });
             const userBalance = await hre.ethers.provider.getBalance(user2.address);
-            await expect(await hre.ethers.provider.getBalance(safeAddress)).to.be.eq(ethers.parseEther("1"));
+            expect(await hre.ethers.provider.getBalance(safeAddress)).to.be.eq(hre.ethers.parseEther("1"));
 
-            let executedTx: any;
-            await expect(
-                executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)]).then((tx) => {
-                    executedTx = tx;
-                    return tx;
-                }),
-            ).to.emit(safe, "ExecutionSuccess");
+            const executedTx = await executeTx(safe.connect(user1), tx, [await safeApproveHash(user1, safe, tx, true)]);
+            await expect(executedTx).to.emit(safe, "ExecutionSuccess");
+
             const receipt = await hre.ethers.provider.getTransactionReceipt(executedTx!.hash);
             const receiptLogs = receipt?.logs ?? [];
-            const logIndex = receiptLogs.length - 1;
+            // There are additional ETH transfer events on zkSync related to transaction fees
+            const logIndex = receiptLogs.length - (hre.network.zksync ? 2 : 1);
             const successEvent = safe.interface.decodeEventLog(
                 "ExecutionSuccess",
                 receiptLogs[logIndex].data,
@@ -223,7 +227,7 @@ describe("Safe", () => {
             expect(successEvent.txHash).to.be.eq(calculateSafeTransactionHash(safeAddress, tx, await chainId()));
             // Gas costs are around 3000, so even if we specified a safeTxGas from 100000 we should not use more
             expect(successEvent.payment).to.be.lte(5000n);
-            await expect(await hre.ethers.provider.getBalance(user2.address)).to.eq(userBalance + successEvent.payment);
+            expect(await hre.ethers.provider.getBalance(user2.address)).to.eq(userBalance + successEvent.payment);
         });
 
         it("should emit payment in failure event", async () => {
@@ -242,20 +246,16 @@ describe("Safe", () => {
                 refundReceiver: user2.address,
             });
 
-            await user1.sendTransaction({ to: safeAddress, value: ethers.parseEther("1") });
+            await user1.sendTransaction({ to: safeAddress, value: hre.ethers.parseEther("1") });
             const userBalance = await hre.ethers.provider.getBalance(user2.address);
-            await expect(await hre.ethers.provider.getBalance(safeAddress)).to.eq(ethers.parseEther("1"));
+            await expect(await hre.ethers.provider.getBalance(safeAddress)).to.eq(hre.ethers.parseEther("1"));
 
-            let executedTx: any;
-            await expect(
-                executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)]).then((tx) => {
-                    executedTx = tx;
-                    return tx;
-                }),
-            ).to.emit(safe, "ExecutionFailure");
+            const executedTx = await executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)]);
+            await expect(executedTx).to.emit(safe, "ExecutionFailure");
             const receipt = await hre.ethers.provider.getTransactionReceipt(executedTx!.hash);
             const receiptLogs = receipt?.logs ?? [];
-            const logIndex = receiptLogs.length - 1;
+            // There are additional ETH transfer events on zkSync related to transaction fees
+            const logIndex = receiptLogs.length - (hre.network.zksync ? 2 : 1);
             const successEvent = safe.interface.decodeEventLog(
                 "ExecutionFailure",
                 receiptLogs[logIndex].data,
@@ -268,6 +268,18 @@ describe("Safe", () => {
         });
 
         it("should be possible to manually increase gas", async () => {
+            if (hre.network.zksync) {
+                // This test fails in zksync because of (allegedly) enormous gas cost differences
+                // a call to useGas(8) costs ~400k gas in evm but ~28m gas in zksync.
+                // I suspect the gas cost difference to play a role but the zksync docs do not mention any numbers so i can't confirm this:
+                // https://docs.zksync.io/zk-stack/concepts/fee-mechanism
+                // From zkSync team:
+                // Update: in-memory node when in standalone mode assumes very high l1 gas price resulting in a very high gas consumption,
+                // We will update the default values and it should result in a similar gas usage as in other networks then. I’ll let you know once it is done.
+                // TODO: update the node plugin when a new version is released
+                return;
+            }
+
             const { safe, signers } = await setupTests();
             const [user1] = signers;
             const safeAddress = await safe.getAddress();
@@ -293,7 +305,7 @@ describe("Safe", () => {
                     this.nested(8, count);
                 }
             }`;
-            const gasUser = await deployContract(user1, gasUserSource);
+            const gasUser = await deployContractFromSource(user1, gasUserSource);
             const to = await gasUser.getAddress();
             const data = gasUser.interface.encodeFunctionData("useGas", [80]);
             const safeTxGas = 10000;
@@ -310,7 +322,7 @@ describe("Safe", () => {
 
             // This should only work if the gasPrice is 0
             tx.gasPrice = 1;
-            await user1.sendTransaction({ to: safeAddress, value: ethers.parseEther("1") });
+            await user1.sendTransaction({ to: safeAddress, value: hre.ethers.parseEther("1") });
             await expect(
                 executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)], { gasLimit: 6000000 }),
                 "Safe transaction should fail with gasPrice 1 and high gasLimit",
@@ -318,6 +330,18 @@ describe("Safe", () => {
         });
 
         it("should forward all the gas to the native token refund receiver", async () => {
+            if (hre.network.zksync) {
+                // This test fails in zksync because of (allegedly) enormous gas cost differences
+                // a call to useGas(8) costs ~400k gas in evm but ~28m gas in zksync.
+                // I suspect the gas cost difference to play a role but the zksync docs do not mention any numbers so i can't confirm this:
+                // https://docs.zksync.io/zk-stack/concepts/fee-mechanism
+                // From zkSync team:
+                // Update: in-memory node when in standalone mode assumes very high l1 gas price resulting in a very high gas consumption,
+                // We will update the default values and it should result in a similar gas usage as in other networks then. I’ll let you know once it is done.
+                // TODO: update the node plugin when a new version is released
+                return;
+            }
+
             const { safe, nativeTokenReceiver, signers } = await setupTests();
             const [user1] = signers;
             const safeAddress = await safe.getAddress();
@@ -332,22 +356,28 @@ describe("Safe", () => {
                 refundReceiver: nativeTokenReceiverAddress,
             });
 
-            await user1.sendTransaction({ to: safeAddress, value: ethers.parseEther("1") });
-            await expect(await hre.ethers.provider.getBalance(safeAddress)).to.eq(ethers.parseEther("1"));
+            await user1.sendTransaction({ to: safeAddress, value: hre.ethers.parseEther("1") });
+            await expect(await hre.ethers.provider.getBalance(safeAddress)).to.eq(hre.ethers.parseEther("1"));
 
-            const executedTx = await executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)], { gasLimit: 500000 });
+            // await expect(await executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)], { gasLimit: 5500000 })).to.emit(
+            //     nativeTokenReceiver,
+            //     "BreadReceived",
+            // );
+
+            const executedTx = await executeTx(safe, tx, [await safeApproveHash(user1, safe, tx, true)], { gasLimit: 5500000 });
             const receipt = await hre.ethers.provider.getTransactionReceipt(executedTx.hash);
+            console.log("gas used:", receipt?.gasUsed.toString());
             const receiptLogs = receipt?.logs ?? [];
             const parsedLogs = [];
             for (const log of receiptLogs) {
                 try {
                     parsedLogs.push(nativeTokenReceiver.interface.decodeEventLog("BreadReceived", log.data, log.topics));
-                } catch (e) {
+                } catch {
                     continue;
                 }
             }
 
-            expect(parsedLogs[0].forwardedGas).to.be.gte(400000n);
+            expect(parsedLogs[0].forwardedGas).to.be.gte(hre.network.zksync ? 340000n : 400000n);
         });
     });
 });

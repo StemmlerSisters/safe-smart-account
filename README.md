@@ -48,13 +48,14 @@ To add support for a new network follow the steps of the ``Deploy`` section and 
 
 > :warning: **Make sure to use the correct commit when deploying the contracts.** Any change (even comments) within the contract files will result in different addresses. The tagged versions that are used by the Safe team can be found in the [releases](https://github.com/safe-global/safe-smart-account/releases).
 
-> **Current version:** The latest release is [v1.3.0-libs.0](https://github.com/safe-global/safe-smart-account/tree/v1.3.0-libs.0) on the commit [767ef36](https://github.com/safe-global/safe-smart-account/commit/767ef36bba88bdbc0c9fe3708a4290cabef4c376)
+> **Current version:** The latest release is [v1.4.1-3](https://github.com/safe-global/safe-smart-account/tree/v1.4.1-3) on the commit [21dc824](https://github.com/safe-global/safe-smart-account/commit/21dc82410445637820f600c7399a804ad55841d5)
 
 This will deploy the contracts deterministically and verify the contracts on etherscan using [Solidity 0.7.6](https://github.com/ethereum/solidity/releases/tag/v0.7.6) by default.
 
 Preparation:
 - Set `MNEMONIC` in `.env`
 - Set `INFURA_KEY` in `.env`
+- For zkSync, set `ZKSYNC_DEPLOYER_PK` in `.env`
 
 ```bash
 npm run deploy-all <network>
@@ -80,11 +81,11 @@ The resulting addresses should be on all networks the same.
 
 Note: Address will vary if contract code is changed or a different Solidity version is used.
 
-#### Replay protection (EIP-155)
+#### Replay protection ([EIP-155](https://eips.ethereum.org/EIPS/eip-155))
 
 Some networks require replay protection, making it incompatible with the default deployment process as it relies on a presigned transaction without replay protection (see https://github.com/Arachnid/deterministic-deployment-proxy). 
 
-Safe Smart Account contracts use a different deterministic deployment proxy (https://github.com/safe-global/safe-singleton-factory). To make sure that the latest version of this package is installed, make sure to run `npm i --save-dev @gnosis.pm/safe-singleton-factory` before deployment. For more information, including how to deploy the factory to a new network, please refer to the factory repo.  
+Safe Smart Account contracts use a different deterministic deployment proxy (https://github.com/safe-global/safe-singleton-factory). To make sure that the latest version of this package is installed, run `npm i --save-dev @safe-global/safe-singleton-factory` before deployment. For more information, including deploying the factory to a new network, please refer to the factory repo.  
 
 Note: This will result in different addresses compared to hardhat's default deterministic deployment process.
 
@@ -95,7 +96,7 @@ This command will use the deployment artifacts to compile the contracts and comp
 npx hardhat --network <network> local-verify
 ```
 
-This command will upload the contract source to Etherescan
+This command will upload the contract source to Etherscan
 ```bash
 npx hardhat --network <network> etherscan-verify
 ```

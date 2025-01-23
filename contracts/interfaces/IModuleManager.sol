@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 pragma solidity >=0.7.0 <0.9.0;
 import {Enum} from "../libraries/Enum.sol";
-import {IGuardManager} from "./IGuardManager.sol";
 
 /**
  * @title IModuleManager - An interface of contract managing Safe modules
@@ -11,11 +10,12 @@ import {IGuardManager} from "./IGuardManager.sol";
            completely takeover a Safe.
  * @author @safe-global/safe-protocol
  */
-interface IModuleManager is IGuardManager {
+interface IModuleManager {
     event EnabledModule(address indexed module);
     event DisabledModule(address indexed module);
     event ExecutionFromModuleSuccess(address indexed module);
     event ExecutionFromModuleFailure(address indexed module);
+    event ChangedModuleGuard(address indexed moduleGuard);
 
     /**
      * @notice Enables the module `module` for the Safe.
@@ -34,7 +34,6 @@ interface IModuleManager is IGuardManager {
 
     /**
      * @notice Execute `operation` (0: Call, 1: DelegateCall) to `to` with `value` (Native Token)
-     * @dev Function is virtual to allow overriding for L2 singleton to emit an event for indexing.
      * @param to Destination address of module transaction.
      * @param value Ether value of module transaction.
      * @param data Data payload of module transaction.
@@ -65,7 +64,7 @@ interface IModuleManager is IGuardManager {
     ) external returns (bool success, bytes memory returnData);
 
     /**
-     * @notice Returns if an module is enabled
+     * @notice Returns if a module is enabled
      * @return True if the module is enabled
      */
     function isModuleEnabled(address module) external view returns (bool);
@@ -80,4 +79,15 @@ interface IModuleManager is IGuardManager {
      * @return next Start of the next page.
      */
     function getModulesPaginated(address start, uint256 pageSize) external view returns (address[] memory array, address next);
+
+    /**
+     * @dev Set a module guard that checks transactions initiated by the module before execution
+     *      This can only be done via a Safe transaction.
+     *      ⚠️ IMPORTANT: Since a module guard has full power to block Safe transaction execution initiated via a module,
+     *        a broken module guard can cause a denial of service for the Safe modules. Make sure to carefully
+     *        audit the module guard code and design recovery mechanisms.
+     * @notice Set Module Guard `moduleGuard` for the Safe. Make sure you trust the module guard.
+     * @param moduleGuard The address of the module guard to be used or the zero address to disable the module guard.
+     */
+    function setModuleGuard(address moduleGuard) external;
 }

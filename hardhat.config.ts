@@ -1,5 +1,10 @@
 import "@nomicfoundation/hardhat-toolbox";
 import type { HardhatUserConfig, HttpNetworkUserConfig } from "hardhat/types";
+import "@matterlabs/hardhat-zksync-deploy";
+import "@matterlabs/hardhat-zksync-solc";
+import "@matterlabs/hardhat-zksync-verify";
+import "@matterlabs/hardhat-zksync-ethers";
+import "@matterlabs/hardhat-zksync-node";
 import "hardhat-deploy";
 import dotenv from "dotenv";
 import yargs from "yargs";
@@ -16,7 +21,17 @@ const argv = yargs
 
 // Load environment variables.
 dotenv.config();
-const { NODE_URL, INFURA_KEY, MNEMONIC, ETHERSCAN_API_KEY, PK, SOLIDITY_VERSION, SOLIDITY_SETTINGS } = process.env;
+const {
+    NODE_URL,
+    INFURA_KEY,
+    MNEMONIC,
+    ETHERSCAN_API_KEY,
+    PK,
+    SOLIDITY_VERSION,
+    SOLIDITY_SETTINGS,
+    HARDHAT_ENABLE_ZKSYNC = "0",
+    HARDHAT_CHAIN_ID = 31337,
+} = process.env;
 
 const DEFAULT_MNEMONIC = "candy maple cake sugar pudding cream honey rich smooth crumble sweet treat";
 
@@ -73,11 +88,19 @@ const userConfig: HardhatUserConfig = {
     solidity: {
         compilers: [{ version: primarySolidityVersion, settings: soliditySettings }, { version: defaultSolidityVersion }],
     },
+    zksolc: {
+        version: "1.5.9",
+        settings: {
+            suppressedErrors: ["assemblycreate"],
+        },
+    },
     networks: {
         hardhat: {
             allowUnlimitedContractSize: true,
             blockGasLimit: 100000000,
             gas: 100000000,
+            zksync: HARDHAT_ENABLE_ZKSYNC === "1",
+            chainId: typeof HARDHAT_CHAIN_ID === "string" && !Number.isNaN(parseInt(HARDHAT_CHAIN_ID)) ? parseInt(HARDHAT_CHAIN_ID) : 31337,
         },
         mainnet: {
             ...sharedNetworkConfig,
@@ -115,6 +138,20 @@ const userConfig: HardhatUserConfig = {
             ...sharedNetworkConfig,
             url: `https://api.avax.network/ext/bc/C/rpc`,
         },
+        zkSyncMainnet: {
+            ...sharedNetworkConfig,
+            url: "https://mainnet.era.zksync.io",
+            ethNetwork: "mainnet",
+            zksync: true,
+            verifyURL: "https://zksync2-mainnet-explorer.zksync.io/contract_verification",
+        },
+        zkSyncSepolia: {
+            ...sharedNetworkConfig,
+            url: "https://sepolia.era.zksync.dev",
+            ethNetwork: "goerli",
+            zksync: true,
+            verifyURL: "https://explorer.sepolia.era.zksync.dev/contract_verification",
+        },
     },
     deterministicDeployment,
     namedAccounts: {
@@ -131,6 +168,7 @@ if (NODE_URL) {
     userConfig.networks!.custom = {
         ...sharedNetworkConfig,
         url: NODE_URL,
+        zksync: HARDHAT_ENABLE_ZKSYNC === "1",
     };
 }
 export default userConfig;
